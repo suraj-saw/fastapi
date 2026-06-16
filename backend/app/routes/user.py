@@ -1,0 +1,143 @@
+# backend/app/routes/user.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from jose import JWTError
+
+from app.database import get_db
+from app.models import User
+from app.schemas import UserCreate, UserLogin, TokenResponse, RefreshRequest, UserResponse
+from app.auth import (
+    hash_password, verify_password,
+    create_token_pair, decode_token,
+    blacklist_refresh_token, is_token_blacklisted, is_session_valid
+)
+
+router = APIRouter(prefix="/api/auth", tags=["Auth"])
+bearer_scheme = HTTPBearer()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired access token")
+
+    # Session check on every request — this is what makes logout
+    # and new logins take effect immediately, not after 20 minutes
+    if not is_session_valid(token):
+        raise HTTPException(
+            status_code=401,
+            detail="Session invalidated. Please log in again."
+        )
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(
+        (User.username == user.username) | (User.email == user.email)
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username or email already exists")
+
+    new_user = User(
+        username=user.username,
+        email=user.email,
+        password=hash_password(user.password)
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "User registered successfully", "user_id": new_user.id}
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(user: UserLogin, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if not db_user or not verify_password(user.password, db_user.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # create_token_pair writes the new session_id to Redis,
+    # instantly invalidating any previously active session
+    access_token, refresh_token = create_token_pair({
+        "sub": db_user.username,
+        "id": db_user.id
+    })
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(body: RefreshRequest):
+    token = body.refresh_token
+
+    if is_token_blacklisted(token):
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
+
+    if not is_session_valid(token):
+        raise HTTPException(
+            status_code=401,
+            detail="Session invalidated. Please log in again."
+        )
+
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        username = payload.get("sub")
+        user_id = payload.get("id")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    # Blacklist old refresh token, issue a fresh pair with new session_id
+    blacklist_refresh_token(token)
+
+    access_token, refresh_token = create_token_pair({
+        "sub": username,
+        "id": user_id
+    })
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+
+@router.post("/logout")
+def logout(body: RefreshRequest):
+    try:
+        payload = decode_token(body.refresh_token)
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=400, detail="Not a refresh token")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    blacklist_refresh_token(body.refresh_token)
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/me", response_model=UserResponse)
+def get_me(current_user: User = Depends(get_current_user)):
+    return current_user

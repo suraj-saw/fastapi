@@ -14,8 +14,15 @@ load_dotenv()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# -- Guard: fail loudly at startup if SECRET_KEY is missing or is placeholder --
+if not SECRET_KEY or SECRET_KEY == "your_secret_key_here":
+    raise RuntimeError(
+        "SECRET_KEY is not configured or is using the placeholder value. "
+        "Set a strong SECRET_KEY in your .env file."
+    )
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -23,11 +30,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 20
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 
-def hash_password(password):
+def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def verify_password(password, hashed_password):
+def verify_password(password: str, hashed_password: str) -> bool:
     return pwd_context.verify(password, hashed_password)
 
 
@@ -93,18 +100,28 @@ def is_session_valid(token: str) -> bool:
 
 
 def blacklist_refresh_token(token: str):
-    """Blacklist a refresh token and clear the user's session."""
+    """
+    Blacklist a refresh token and clear the user's session atomically.
+    Uses a Redis pipeline to ensure both operations succeed or fail together,
+    preventing a race condition where the session could be cleared but the
+    token not blacklisted (or vice versa).
+    """
     try:
         payload = decode_token(token)
         exp = payload.get("exp")
         user_id = payload.get("id")
+
+        if not exp or not user_id:
+            return
+
         ttl = int(exp - datetime.utcnow().timestamp())
 
+        # Atomic pipeline: both ops execute together
+        pipe = redis_client.pipeline()
         if ttl > 0:
-            redis_client.setex(f"blacklist:{token}", ttl, "revoked")
-
-        if user_id:
-            redis_client.delete(f"session:{user_id}")
+            pipe.setex(f"blacklist:{token}", ttl, "revoked")
+        pipe.delete(f"session:{user_id}")
+        pipe.execute()
 
     except JWTError:
         pass

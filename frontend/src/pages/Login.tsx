@@ -1,88 +1,125 @@
 import { useState, type ChangeEvent, type FormEvent } from "react";
-
 import { Link, useNavigate } from "react-router-dom";
-
 import API from "../api/axios";
 
 interface LoginForm {
-  username: string;
-  password: string;
+    username: string;
+    password: string;
 }
 
 interface LoginResponse {
-  access_token: string;
-  token_type: string;
-  refresh_token: string;
+    access_token: string;
+    token_type: string;
+    refresh_token: string;
+}
+
+type FastAPIDetail = string | { msg: string; loc: string[] }[];
+
+function extractErrorMessage(detail: FastAPIDetail): string {
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+        return detail.map((d) => d.msg.replace("Value error, ", "")).join(" · ");
+    }
+    return "Something went wrong. Please try again.";
 }
 
 function Login() {
-  const navigate = useNavigate();
+    const navigate = useNavigate();
+    const [form, setForm] = useState<LoginForm>({ username: "", password: "" });
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
 
-  const [form, setForm] = useState<LoginForm>({
-    username: "",
-    password: "",
-  });
+    const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+        setError(null);
+        setForm({ ...form, [e.target.name]: e.target.value });
+    };
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setForm({
-      ...form,
+    const loginUser = async (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setLoading(true);
+        setError(null);
+        try {
+            const response = await API.post<LoginResponse>("/auth/login", form);
+            sessionStorage.setItem("access_token", response.data.access_token);
+            sessionStorage.setItem("refresh_token", response.data.refresh_token);
+            navigate("/dashboard");
+        } catch (err: unknown) {
+            const detail = (err as { response?: { data?: { detail?: FastAPIDetail } } })
+                ?.response?.data?.detail;
+            setError(detail ? extractErrorMessage(detail) : "Invalid username or password.");
+        } finally {
+            setLoading(false);
+        }
+    };
 
-      [e.target.name]: e.target.value,
-    });
-  };
+    return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-md p-8">
+                <h2 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h2>
+                <p className="text-sm text-gray-500 mb-6">
+                    New here?{" "}
+                    <Link to="/" className="text-indigo-600 hover:underline font-medium">
+                        Create an account
+                    </Link>
+                </p>
 
-  const loginUser = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+                {error && (
+                    <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+                        {error}
+                    </div>
+                )}
 
-    try {
-      const response = await API.post<LoginResponse>(
-        "/auth/login",
+                <form onSubmit={loginUser} className="space-y-4">
+                    <div>
+                        <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+                            Username
+                        </label>
+                        <input
+                            id="username"
+                            type="text"
+                            name="username"
+                            placeholder="your_handle"
+                            value={form.username}
+                            onChange={handleChange}
+                            required
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+                                       placeholder-gray-400 focus:outline-none focus:ring-2
+                                       focus:ring-indigo-500 focus:border-transparent transition"
+                        />
+                    </div>
 
-        form,
-      );
+                    <div>
+                        <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                            Password
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            name="password"
+                            placeholder="••••••••"
+                            value={form.password}
+                            onChange={handleChange}
+                            required
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+                                       placeholder-gray-400 focus:outline-none focus:ring-2
+                                       focus:ring-indigo-500 focus:border-transparent transition"
+                        />
+                    </div>
 
-      localStorage.setItem("token", response.data.access_token);
-
-      // With:
-      sessionStorage.setItem("access_token", response.data.access_token);
-      sessionStorage.setItem("refresh_token", response.data.refresh_token);
-
-      navigate("/dashboard");
-    } catch (error) {
-      alert("Invalid username or password");
-    }
-  };
-
-  return (
-    <div className="container">
-      <h2>Login</h2>
-
-      <form onSubmit={loginUser}>
-        <input
-          type="text"
-          name="username"
-          placeholder="Username"
-          value={form.username}
-          onChange={handleChange}
-        />
-
-        <input
-          type="password"
-          name="password"
-          placeholder="Password"
-          value={form.password}
-          onChange={handleChange}
-        />
-
-        <button type="submit">Login</button>
-      </form>
-
-      <p>
-        New User?
-        <Link to="/">Signup</Link>
-      </p>
-    </div>
-  );
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold
+                                   text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed
+                                   focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+                                   transition"
+                    >
+                        {loading ? "Logging in…" : "Log in"}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
 }
 
 export default Login;

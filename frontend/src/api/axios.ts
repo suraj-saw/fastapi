@@ -4,9 +4,8 @@ import axios, {
     type AxiosError
 } from "axios";
 
-const BASE_URL = import.meta.env.DEV
-    ? "http://localhost:8000"
-    : "/api";
+// FIXED: Changed port from 8000 to 8080 because the API is exposed via Nginx on 8080
+const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8080/api" : "/api");
 
 const API = axios.create({ baseURL: BASE_URL });
 

@@ -1,5 +1,6 @@
 # backend/app/auth.py
 
+
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
@@ -27,7 +28,8 @@ if not SECRET_KEY or SECRET_KEY == "your_secret_key_here":
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 20
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+REFRESH_TOKEN_EXPIRE_HOURS = 8
+IDLE_TIMEOUT_MINUTES = 30
 
 
 def hash_password(password: str) -> str:
@@ -49,7 +51,7 @@ def create_token_pair(data: dict) -> tuple[str, str]:
 
     # Store this session_id as the one valid session for this user
     # Any previous session_id is overwritten — instant invalidation
-    ttl = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+    ttl = IDLE_TIMEOUT_MINUTES * 60
     redis_client.setex(f"session:{user_id}", ttl, session_id)
 
     base_payload = {**data, "session_id": session_id}
@@ -65,7 +67,7 @@ def create_token_pair(data: dict) -> tuple[str, str]:
     # Refresh token
     refresh_payload = {
         **base_payload,
-        "exp": datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        "exp": datetime.utcnow() + timedelta(hours=REFRESH_TOKEN_EXPIRE_HOURS),
         "type": "refresh"
     }
     refresh_token = jwt.encode(refresh_payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -93,7 +95,10 @@ def is_session_valid(token: str) -> bool:
             return False
 
         stored = redis_client.get(f"session:{user_id}")
-        return stored == token_session_id
+        if stored == token_session_id:
+            redis_client.expire(f"session:{user_id}", IDLE_TIMEOUT_MINUTES * 60)
+            return True
+        return False
 
     except JWTError:
         return False

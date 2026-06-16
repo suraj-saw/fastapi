@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useState, useEffect, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../api/axios";
 
@@ -29,6 +29,12 @@ function Login() {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
+    useEffect(() => {
+        API.get("/auth/me")
+            .then(() => navigate("/dashboard"))
+            .catch(() => {}); // Not logged in, stay on login page
+    }, [navigate]);
+
     const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
         setError(null);
         setForm({ ...form, [e.target.name]: e.target.value });
@@ -39,9 +45,7 @@ function Login() {
         setLoading(true);
         setError(null);
         try {
-            const response = await API.post<LoginResponse>("/auth/login", form);
-            sessionStorage.setItem("access_token", response.data.access_token);
-            sessionStorage.setItem("refresh_token", response.data.refresh_token);
+            await API.post("/auth/login", form);
             navigate("/dashboard");
         } catch (err: unknown) {
             const detail = (err as { response?: { data?: { detail?: FastAPIDetail } } })
@@ -58,7 +62,7 @@ function Login() {
                 <h2 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h2>
                 <p className="text-sm text-gray-500 mb-6">
                     New here?{" "}
-                    <Link to="/" className="text-indigo-600 hover:underline font-medium">
+                    <Link to="/signup" className="text-indigo-600 hover:underline font-medium">
                         Create an account
                     </Link>
                 </p>

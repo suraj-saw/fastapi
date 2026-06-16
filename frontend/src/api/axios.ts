@@ -7,17 +7,10 @@ import axios, {
 // FIXED: Changed port from 8000 to 8080 because the API is exposed via Nginx on 8080
 const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8080/api" : "/api");
 
-const API = axios.create({ baseURL: BASE_URL });
-
-API.interceptors.request.use(
-    (config: InternalAxiosRequestConfig) => {
-        const token = sessionStorage.getItem("access_token");
-        if (token && config.headers) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-    }
-);
+const API = axios.create({
+    baseURL: BASE_URL,
+    withCredentials: true
+});
 
 let isRefreshing = false;
 let failedQueue: Array<{
@@ -25,10 +18,10 @@ let failedQueue: Array<{
     reject: (reason?: unknown) => void;
 }> = [];
 
-function processQueue(error: unknown, token: string | null = null) {
+function processQueue(error: unknown) {
     failedQueue.forEach(p => {
         if (error) p.reject(error);
-        else p.resolve(token!);
+        else p.resolve("");
     });
     failedQueue = [];
 }
@@ -47,8 +40,7 @@ API.interceptors.response.use(
             if (isRefreshing) {
                 return new Promise((resolve, reject) => {
                     failedQueue.push({ resolve, reject });
-                }).then(token => {
-                    originalRequest.headers.Authorization = `Bearer ${token}`;
+                }).then(() => {
                     return API(originalRequest);
                 });
             }
@@ -56,29 +48,13 @@ API.interceptors.response.use(
             originalRequest._retry = true;
             isRefreshing = true;
 
-            const refreshToken = sessionStorage.getItem("refresh_token");
-
-            if (!refreshToken) {
-                sessionStorage.clear();
-                window.location.href = "/login";
-                return Promise.reject(error);
-            }
-
             try {
-                const { data } = await axios.post(`${BASE_URL}/auth/refresh`, {
-                    refresh_token: refreshToken
-                });
+                await axios.post(`${BASE_URL}/auth/refresh`, {}, { withCredentials: true });
 
-                sessionStorage.setItem("access_token", data.access_token);
-                sessionStorage.setItem("refresh_token", data.refresh_token);
-
-                processQueue(null, data.access_token);
-                originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+                processQueue(null);
                 return API(originalRequest);
             } catch (refreshError) {
-                processQueue(refreshError, null);
-                sessionStorage.clear();
-                window.location.href = "/login";
+                processQueue(refreshError);
                 return Promise.reject(refreshError);
             } finally {
                 isRefreshing = false;

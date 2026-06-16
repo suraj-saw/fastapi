@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useState, useEffect, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../api/axios";
 
@@ -24,6 +24,12 @@ function Signup() {
     const [form, setForm] = useState<SignupForm>({ username: "", email: "", password: "" });
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        API.get("/auth/me")
+            .then(() => navigate("/dashboard"))
+            .catch(() => {}); // Not logged in, stay on signup page
+    }, [navigate]);
 
     const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
         setError(null);

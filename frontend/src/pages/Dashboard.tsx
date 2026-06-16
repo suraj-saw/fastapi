@@ -18,42 +18,51 @@ function Dashboard() {
     const [sessionStatus, setSessionStatus] = useState<"checking" | "active" | "kicked">(
         "checking"
     );
-    // Keep a stable ref so the cleanup in useEffect can always clear the latest timer.
-    const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-    const fetchMe = async () => {
-        try {
-            const response = await API.get<User>("/auth/me");
-            setUser(response.data);
-            setSessionStatus("active");
-        } catch {
-            // The axios interceptor already attempted a token refresh and failed,
-            // meaning the session was invalidated server-side.
-            setSessionStatus("kicked");
-            if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-            }
-        }
-    };
 
     useEffect(() => {
-        fetchMe();
-        intervalRef.current = setInterval(fetchMe, SESSION_POLL_INTERVAL_MS);
+        let isSubscribed = true;
+        let timeoutId: ReturnType<typeof setTimeout>;
+        let hasInitiallyLoaded = false;
+
+        const poll = async () => {
+            if (!isSubscribed) return;
+            try {
+                const response = await API.get<User>("/auth/me");
+                if (isSubscribed) {
+                    setUser(response.data);
+                    setSessionStatus("active");
+                    hasInitiallyLoaded = true;
+                    timeoutId = setTimeout(poll, SESSION_POLL_INTERVAL_MS);
+                }
+            } catch (error: any) {
+                if (!isSubscribed) return;
+                
+                if (error.response?.status === 401) {
+                    setSessionStatus("kicked");
+                } else {
+                    // Backend offline or restarting.
+                    // If we haven't loaded the dashboard yet, retry aggressively (250ms).
+                    // If we are already active, just check again at the normal 5s interval.
+                    const delay = hasInitiallyLoaded ? SESSION_POLL_INTERVAL_MS : 250;
+                    timeoutId = setTimeout(poll, delay);
+                }
+            }
+        };
+
+        poll();
+
         return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
+            isSubscribed = false;
+            clearTimeout(timeoutId);
         };
     }, []);
 
     const logout = async () => {
-        const refreshToken = sessionStorage.getItem("refresh_token");
-        if (refreshToken) {
-            try {
-                await API.post("/auth/logout", { refresh_token: refreshToken });
-            } catch {
-                // Clear locally even if the API call fails.
-            }
+        try {
+            await API.post("/auth/logout");
+        } catch {
+            // Navigate anyway even if the API call fails
         }
-        sessionStorage.clear();
         navigate("/login");
     };
 

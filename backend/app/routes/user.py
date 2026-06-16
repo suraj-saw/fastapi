@@ -1,27 +1,28 @@
 # backend/app/routes/user.py
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.orm import Session
 from jose import JWTError
 
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserLogin, TokenResponse, RefreshRequest, UserResponse
+from app.schemas import UserCreate, UserLogin, UserResponse
 from app.auth import (
     hash_password, verify_password,
     create_token_pair, decode_token,
-    blacklist_refresh_token, is_token_blacklisted, is_session_valid
+    blacklist_refresh_token, is_token_blacklisted, is_session_valid,
+    ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_HOURS
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
-bearer_scheme = HTTPBearer()
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    request: Request,
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
         payload = decode_token(token)
@@ -66,8 +67,8 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": "User registered successfully", "user_id": new_user.id}
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(user: UserLogin, db: Session = Depends(get_db)):
+@router.post("/login")
+def login(user: UserLogin, response: Response, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -79,16 +80,31 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
         "id": db_user.id
     })
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer"
-    }
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        path="/"
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=REFRESH_TOKEN_EXPIRE_HOURS * 3600,
+        samesite="lax",
+        path="/"
+    )
+
+    return {"message": "Logged in successfully"}
 
 
-@router.post("/refresh", response_model=TokenResponse)
-def refresh(body: RefreshRequest):
-    token = body.refresh_token
+@router.post("/refresh")
+def refresh(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
 
     if is_token_blacklisted(token):
         raise HTTPException(status_code=401, detail="Refresh token has been revoked")
@@ -118,23 +134,39 @@ def refresh(body: RefreshRequest):
         "id": user_id
     })
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer"
-    }
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        path="/"
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=REFRESH_TOKEN_EXPIRE_HOURS * 3600,
+        samesite="lax",
+        path="/"
+    )
+
+    return {"message": "Token refreshed successfully"}
 
 
 @router.post("/logout")
-def logout(body: RefreshRequest):
-    try:
-        payload = decode_token(body.refresh_token)
-        if payload.get("type") != "refresh":
-            raise HTTPException(status_code=400, detail="Not a refresh token")
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid token")
+def logout(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if token:
+        try:
+            payload = decode_token(token)
+            if payload.get("type") == "refresh":
+                blacklist_refresh_token(token)
+        except JWTError:
+            pass
 
-    blacklist_refresh_token(body.refresh_token)
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
     return {"message": "Logged out successfully"}
 
 

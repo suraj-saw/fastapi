@@ -1,4 +1,3 @@
-# backend/app/routes/user.py
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.orm import Session
 from jose import JWTError
@@ -7,35 +6,40 @@ from app.database import get_db
 from app.models import User
 from app.schemas import UserCreate, UserLogin, UserResponse
 from app.auth import (
-    hash_password, verify_password,
-    create_token_pair, decode_token,
-    blacklist_refresh_token, is_token_blacklisted, is_session_valid,
-    ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_HOURS
+    hash_password,
+    verify_password,
+    create_token_pair,
+    decode_token,
+    blacklist_refresh_token,
+    is_token_blacklisted,
+    is_session_valid,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_HOURS,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 
-def get_current_user(
-    request: Request,
-    db: Session = Depends(get_db)
-):
+def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("access_token")
+
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
         payload = decode_token(token)
+
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
+
         username = payload.get("sub")
+
         if not username:
             raise HTTPException(status_code=401, detail="Invalid token")
+
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired access token")
 
-    # Session check on every request — this is what makes logout
-    # and new logins take effect immediately, not after 20 minutes
     if not is_session_valid(token):
         raise HTTPException(
             status_code=401,
@@ -43,8 +47,10 @@ def get_current_user(
         )
 
     user = db.query(User).filter(User.username == username).first()
+
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
     return user
 
 
@@ -53,31 +59,33 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(
         (User.username == user.username) | (User.email == user.email)
     ).first()
+
     if existing:
         raise HTTPException(status_code=400, detail="Username or email already exists")
 
     new_user = User(
         username=user.username,
         email=user.email,
-        password=hash_password(user.password)
+        password=hash_password(user.password),
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
     return {"message": "User registered successfully", "user_id": new_user.id}
 
 
 @router.post("/login")
 def login(user: UserLogin, response: Response, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == user.username).first()
+
     if not db_user or not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # create_token_pair writes the new session_id to Redis,
-    # instantly invalidating any previously active session
     access_token, refresh_token = create_token_pair({
         "sub": db_user.username,
-        "id": db_user.id
+        "id": db_user.id,
     })
 
     response.set_cookie(
@@ -86,15 +94,16 @@ def login(user: UserLogin, response: Response, db: Session = Depends(get_db)):
         httponly=True,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
-        path="/"
+        path="/",
     )
+
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         max_age=REFRESH_TOKEN_EXPIRE_HOURS * 3600,
         samesite="lax",
-        path="/"
+        path="/",
     )
 
     return {"message": "Logged in successfully"}
@@ -103,6 +112,7 @@ def login(user: UserLogin, response: Response, db: Session = Depends(get_db)):
 @router.post("/refresh")
 def refresh(request: Request, response: Response):
     token = request.cookies.get("refresh_token")
+
     if not token:
         raise HTTPException(status_code=401, detail="Refresh token missing")
 
@@ -117,21 +127,24 @@ def refresh(request: Request, response: Response):
 
     try:
         payload = decode_token(token)
+
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Invalid token type")
+
         username = payload.get("sub")
         user_id = payload.get("id")
-        if not username:
+
+        if not username or not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
+
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    # Blacklist old refresh token, issue a fresh pair with new session_id
-    blacklist_refresh_token(token)
+    blacklist_refresh_token(token, revoke_session=False)
 
     access_token, refresh_token = create_token_pair({
         "sub": username,
-        "id": user_id
+        "id": user_id,
     })
 
     response.set_cookie(
@@ -140,15 +153,16 @@ def refresh(request: Request, response: Response):
         httponly=True,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
-        path="/"
+        path="/",
     )
+
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         max_age=REFRESH_TOKEN_EXPIRE_HOURS * 3600,
         samesite="lax",
-        path="/"
+        path="/",
     )
 
     return {"message": "Token refreshed successfully"}
@@ -157,16 +171,13 @@ def refresh(request: Request, response: Response):
 @router.post("/logout")
 def logout(request: Request, response: Response):
     token = request.cookies.get("refresh_token")
+
     if token:
-        try:
-            payload = decode_token(token)
-            if payload.get("type") == "refresh":
-                blacklist_refresh_token(token)
-        except JWTError:
-            pass
+        blacklist_refresh_token(token, revoke_session=True)
 
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
+
     return {"message": "Logged out successfully"}
 
 

@@ -3,149 +3,184 @@ import { Link, useNavigate } from "react-router-dom";
 import API from "../api/axios";
 
 interface SignupForm {
-    username: string;
-    email: string;
-    password: string;
+  username: string;
+  email: string;
+  password: string;
 }
 
 // FastAPI validation errors can be a string OR an array of {msg, loc} objects
 type FastAPIDetail = string | { msg: string; loc: string[] }[];
 
 function extractErrorMessage(detail: FastAPIDetail): string {
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-        return detail.map((d) => d.msg.replace("Value error, ", "")).join(" · ");
-    }
-    return "Something went wrong. Please try again.";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d) => d.msg.replace("Value error, ", "")).join(" · ");
+  }
+  return "Something went wrong. Please try again.";
 }
 
 function Signup() {
-    const navigate = useNavigate();
-    const [form, setForm] = useState<SignupForm>({ username: "", email: "", password: "" });
-    const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const [form, setForm] = useState<SignupForm>({
+    username: "",
+    email: "",
+    password: "",
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        API.get("/auth/me")
-            .then(() => navigate("/dashboard"))
-            .catch(() => {}); // Not logged in, stay on signup page
-    }, [navigate]);
+  useEffect(() => {
+    let cancelled = false;
 
-    const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-        setError(null);
-        setForm({ ...form, [e.target.name]: e.target.value });
-    };
-
-    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        setLoading(true);
-        setError(null);
-        try {
-            await API.post("/auth/register", form);
-            navigate("/login");
-        } catch (err: unknown) {
-            const detail = (err as { response?: { data?: { detail?: FastAPIDetail } } })
-                ?.response?.data?.detail;
-            setError(detail ? extractErrorMessage(detail) : "Signup failed. Please try again.");
-        } finally {
-            setLoading(false);
+    API.get("/auth/me")
+      .then(() => {
+        if (!cancelled) {
+          navigate("/dashboard", { replace: true });
         }
+      })
+      .catch(() => {
+        // Not logged in, stay on signup page.
+      });
+
+    return () => {
+      cancelled = true;
     };
+  }, [navigate]);
 
-    return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-            <div className="w-full max-w-md bg-white rounded-2xl shadow-md p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-1">Create account</h2>
-                <p className="text-sm text-gray-500 mb-6">
-                    Already registered?{" "}
-                    <Link to="/login" className="text-indigo-600 hover:underline font-medium">
-                        Log in
-                    </Link>
-                </p>
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
 
-                {error && (
-                    <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-                        {error}
-                    </div>
-                )}
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await API.post("/auth/register", form);
+      navigate("/login");
+    } catch (err: unknown) {
+      const detail = (
+        err as { response?: { data?: { detail?: FastAPIDetail } } }
+      )?.response?.data?.detail;
+      setError(
+        detail
+          ? extractErrorMessage(detail)
+          : "Signup failed. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
-                {/* Password rules hint */}
-                <div className="mb-4 rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-xs text-blue-700 space-y-0.5">
-                    <p className="font-medium mb-1">Password must contain:</p>
-                    <p>• At least 8 characters</p>
-                    <p>• Uppercase &amp; lowercase letters</p>
-                    <p>• A number and a special character (!@#$%…)</p>
-                </div>
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-md p-8">
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">
+          Create account
+        </h2>
+        <p className="text-sm text-gray-500 mb-6">
+          Already registered?{" "}
+          <Link
+            to="/login"
+            className="text-indigo-600 hover:underline font-medium"
+          >
+            Log in
+          </Link>
+        </p>
 
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div>
-                        <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-                            Username
-                        </label>
-                        <input
-                            id="username"
-                            type="text"
-                            name="username"
-                            placeholder="your_handle"
-                            value={form.username}
-                            onChange={handleChange}
-                            required
-                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+        {error && (
+          <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Password rules hint */}
+        <div className="mb-4 rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-xs text-blue-700 space-y-0.5">
+          <p className="font-medium mb-1">Password must contain:</p>
+          <p>• At least 8 characters</p>
+          <p>• Uppercase &amp; lowercase letters</p>
+          <p>• A number and a special character (!@#$%…)</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label
+              htmlFor="username"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Username
+            </label>
+            <input
+              id="username"
+              type="text"
+              name="username"
+              placeholder="your_handle"
+              value={form.username}
+              onChange={handleChange}
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                        placeholder-gray-400 focus:outline-none focus:ring-2
                                        focus:ring-indigo-500 focus:border-transparent transition"
-                        />
-                    </div>
+            />
+          </div>
 
-                    <div>
-                        <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                            Email
-                        </label>
-                        <input
-                            id="email"
-                            type="email"
-                            name="email"
-                            placeholder="you@example.com"
-                            value={form.email}
-                            onChange={handleChange}
-                            required
-                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+          <div>
+            <label
+              htmlFor="email"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              name="email"
+              placeholder="you@example.com"
+              value={form.email}
+              onChange={handleChange}
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                        placeholder-gray-400 focus:outline-none focus:ring-2
                                        focus:ring-indigo-500 focus:border-transparent transition"
-                        />
-                    </div>
+            />
+          </div>
 
-                    <div>
-                        <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                            Password
-                        </label>
-                        <input
-                            id="password"
-                            type="password"
-                            name="password"
-                            placeholder="••••••••"
-                            value={form.password}
-                            onChange={handleChange}
-                            required
-                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              name="password"
+              placeholder="••••••••"
+              value={form.password}
+              onChange={handleChange}
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
                                        placeholder-gray-400 focus:outline-none focus:ring-2
                                        focus:ring-indigo-500 focus:border-transparent transition"
-                        />
-                    </div>
+            />
+          </div>
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold
                                    text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed
                                    focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
                                    transition"
-                    >
-                        {loading ? "Creating account…" : "Sign up"}
-                    </button>
-                </form>
-            </div>
-        </div>
-    );
+          >
+            {loading ? "Creating account…" : "Sign up"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 export default Signup;

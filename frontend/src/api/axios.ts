@@ -1,11 +1,23 @@
 import axios, {
-    type InternalAxiosRequestConfig,
+    type AxiosError,
     type AxiosResponse,
-    type AxiosError
+    type InternalAxiosRequestConfig
 } from "axios";
 
-// FIXED: Changed port from 8000 to 8080 because the API is exposed via Nginx on 8080
-const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8080/api" : "/api");
+declare module "axios" {
+    export interface AxiosRequestConfig {
+        skipAuthRefresh?: boolean;
+    }
+
+    export interface InternalAxiosRequestConfig {
+        skipAuthRefresh?: boolean;
+        _retry?: boolean;
+    }
+}
+
+const BASE_URL =
+    import.meta.env.VITE_API_URL ??
+    (import.meta.env.DEV ? "http://localhost:8080/api" : "/api");
 
 const API = axios.create({
     baseURL: BASE_URL,
@@ -13,55 +25,69 @@ const API = axios.create({
 });
 
 let isRefreshing = false;
+
 let failedQueue: Array<{
-    resolve: (value: string) => void;
+    resolve: () => void;
     reject: (reason?: unknown) => void;
 }> = [];
 
-function processQueue(error: unknown) {
-    failedQueue.forEach(p => {
-        if (error) p.reject(error);
-        else p.resolve("");
+function processQueue(error?: unknown) {
+    failedQueue.forEach(({ resolve, reject }) => {
+        if (error) reject(error);
+        else resolve();
     });
+
     failedQueue = [];
+}
+
+function isAuthEndpoint(url?: string) {
+    return (
+        url?.includes("/auth/login") ||
+        url?.includes("/auth/register") ||
+        url?.includes("/auth/refresh") ||
+        url?.includes("/auth/logout")
+    );
 }
 
 API.interceptors.response.use(
     (response: AxiosResponse) => response,
     async (error: AxiosError) => {
-        const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+        const originalRequest = error.config as InternalAxiosRequestConfig | undefined;
 
-        if (
-            error.response?.status === 401 &&
-            !originalRequest._retry &&
-            !originalRequest.url?.includes("/auth/refresh") &&
-            !originalRequest.url?.includes("/auth/login")
-        ) {
-            if (isRefreshing) {
-                return new Promise((resolve, reject) => {
-                    failedQueue.push({ resolve, reject });
-                }).then(() => {
-                    return API(originalRequest);
-                });
-            }
-
-            originalRequest._retry = true;
-            isRefreshing = true;
-
-            try {
-                await axios.post(`${BASE_URL}/auth/refresh`, {}, { withCredentials: true });
-
-                processQueue(null);
-                return API(originalRequest);
-            } catch (refreshError) {
-                processQueue(refreshError);
-                return Promise.reject(refreshError);
-            } finally {
-                isRefreshing = false;
-            }
+        if (!originalRequest) {
+            return Promise.reject(error);
         }
 
-        return Promise.reject(error);
+        const shouldTryRefresh =
+            error.response?.status === 401 &&
+            !originalRequest._retry &&
+            !originalRequest.skipAuthRefresh &&
+            !isAuthEndpoint(originalRequest.url);
+
+        if (!shouldTryRefresh) {
+            return Promise.reject(error);
+        }
+
+        if (isRefreshing) {
+            return new Promise<void>((resolve, reject) => {
+                failedQueue.push({ resolve, reject });
+            }).then(() => API(originalRequest));
+        }
+
+        originalRequest._retry = true;
+        isRefreshing = true;
+
+        try {
+            await axios.post(`${BASE_URL}/auth/refresh`, {}, { withCredentials: true });
+
+            processQueue();
+            return API(originalRequest);
+        } catch (refreshError) {
+            processQueue(refreshError);
+            return Promise.reject(refreshError);
+        } finally {
+            isRefreshing = false;
+        }
     }
 );
 
